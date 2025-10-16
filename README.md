@@ -8,6 +8,7 @@ This system recommends horror stories by:
 - Analyzing story content using TF-IDF vectorization
 - Using ML models (Gradient Boosting, SVR) for quality prediction
 - Combining multiple approaches in hybrid systems
+- Achieving **79.7% precision** with Gradient Boosting (26.7% improvement over baseline)
 
 ## Features
 
@@ -31,12 +32,12 @@ Place `creepypastas.xlsx` in the project directory.
 
 **Validate Dataset:**
 ```bash
-python dataset_validation.py
+python samp_assign.py
 ```
 
 **Train Models:**
 ```bash
-python recommendation_system.py
+python assignment.py
 ```
 
 **Interactive Recommendations:**
@@ -49,8 +50,8 @@ python recommendation_system.py
 1. **Baseline**: Pure content-based (TF-IDF + cosine similarity)
 2. **ML Model 1**: Gradient Boosting Ranker (pairwise ranking)
 3. **ML Model 2**: Support Vector Regression (rating prediction)
-4. **Hybrid 1**: Content (60%) + GB (40%)
-5. **Hybrid 2**: Content (50%) + SVR (30%) + Rating patterns (20%)
+4. **Hybrid 1**: Content + GB (gentler weighting)
+5. **Hybrid 2**: Content + SVR (conservative weighting)
 
 ## Results
 
@@ -58,18 +59,20 @@ python recommendation_system.py
 
 | System | Precision@5 | NDCG@5 |
 |--------|-------------|---------|
-| Content-Based (Baseline) | 0.6410 | 0.8837 |
-| ML Model 1: Gradient Boosting | 1.0000 | 0.9520 |
-| **ML Model 2: SVR** | **1.0000** | **0.9901** |
-| Hybrid 1: Content + GB | 0.8230 | 0.9366 |
-| Hybrid 2: Content + SVR + Rating | 0.9560 | 0.9653 |
+| Content-Based (Baseline) | 0.6290 | 0.8847 |
+| **ML Model 1: Gradient Boosting** | **0.7970** | **0.9268** |
+| ML Model 2: Support Vector Regression | 0.7870 | 0.9185 |
+| Hybrid 1: Content + GB | 0.7620 | 0.9085 |
+| Hybrid 2: Content + SVR Enhanced | 0.7370 | 0.9108 |
 
-**Best Model: Support Vector Regression**
-- Initial Precision@5: 1.0000 | NDCG@5: 0.9901
+**Best Model: Gradient Boosting Quality Weights**
+- Test Precision@5: 0.7970 (79.7%)
+- Test NDCG@5: 0.9268 (92.68%)
+- Improvement: +26.7% over baseline
 
 **5-Fold Cross-Validation Results:**
-- Precision@5: 0.6822 ± 0.0191 ✓ Excellent stability
-- NDCG@5: 0.8914 ± 0.0055
+- Precision@5: 0.6650 ± 0.0147 ✓ Excellent stability
+- NDCG@5: 0.8938 ± 0.0016
 
 ## Dataset Requirements
 
@@ -81,10 +84,10 @@ Excel file (`creepypastas.xlsx`) with columns:
 
 ```
 horror-story-recommender/
-├── dataset_validation.py
-├── recommendation_system.py
-├── creepypastas.xlsx
-└── README.md
+├── samp_assign.py      # Data quality check
+├── assignment.py   # Main recommendation system
+├── creepypastas.xlsx          # Dataset (not included)
+└── README.md                  # This file
 ```
 
 ## Technical Details
@@ -94,14 +97,28 @@ horror-story-recommender/
 - **Evaluation**: 80/20 train-test split, 5-fold CV
 - **Threshold**: Rating ≥8.0 = relevant
 
-## License
+## Key Improvements
 
-MIT License
+**Fixed Evaluation Method:**
+- Old: Found similar training story first (inflated scores)
+- New: Direct test-to-train similarity (realistic scores)
 
-## Contact
+**ML as Quality Weights:**
+- Old: Created artificial similarity from predictions
+- New: Weight content similarity with quality predictions
 
-Open an issue on GitHub for questions or feedback.
+**Results:**
+- More realistic scores (0.63-0.80 vs inflated 1.0)
+- Better CV consistency (16.6% gap vs 32%)
+- Diverse recommendations (ratings 6.0-9.0 vs only 9.0+)
 
----
+## About `samp_assign.py`
 
-*Educational project demonstrating recommendation system techniques.*
+**Purpose:** Pre-flight data quality check before training.
+
+**What it does:** Validates dataset structure, analyzes ratings/text/metadata, checks recommendation system feasibility.
+
+**Runtime:** ~5 seconds
+
+**Output:** Dataset stats (3,485 stories, mean rating 7.57), metadata analysis (2,481 tags, 82 categories), suitability assessment.
+
