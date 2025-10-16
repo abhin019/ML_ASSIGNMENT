@@ -12,7 +12,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 print("=" * 110)
-print("ML MODELS + HYBRID SYSTEMS FOR STORY RECOMMENDATION")
+print("ML MODELS + HYBRID SYSTEMS FOR STORY RECOMMENDATION (FIXED)")
 print("=" * 110)
 
 # ============================================================================
@@ -74,32 +74,37 @@ print(f"TF-IDF: {tfidf_matrix.shape} | Tags: {tag_matrix.shape} | Categories: {c
 print(f"Combined features: {content_features.shape}")
 
 # ============================================================================
-# STEP 3: BASELINE - PURE CONTENT-BASED
+# STEP 3: FIXED EVALUATION FUNCTION
 # ============================================================================
 
-print("\n\nSTEP 3: BASELINE - PURE CONTENT-BASED SIMILARITY")
-print("-" * 110)
-
-content_sim = cosine_similarity(content_features)
-
-def evaluate_similarity(sim_matrix, train_idx, test_idx, k=5, threshold=8.0):
-    """Evaluate similarity-based recommendations"""
+def evaluate_recommendations(train_idx, test_idx, quality_weights=None, k=5, threshold=8.0):
+    """
+    FIXED: Direct test-to-train similarity evaluation
+    Computes similarity from each test story directly to training stories
+    """
     precisions = []
     ndcgs = []
     
-    for test_original_idx in test_idx[:200]:  # Sample for speed
-        # Find similar training stories
-        test_features = content_features[test_original_idx].toarray()
-        sims_to_test = cosine_similarity(test_features, content_features[train_idx])[0]
-        most_similar_pos = np.argmax(sims_to_test)
+    train_features = content_features[train_idx]
+    
+    # Sample test set for reasonable runtime
+    test_sample = test_idx[:min(200, len(test_idx))]
+    
+    for test_original_idx in test_sample:
+        # Compute similarity from this test story to all training stories
+        test_feature = content_features[test_original_idx]
+        similarities = cosine_similarity(test_feature, train_features)[0]
         
-        # Get recommendations
-        rec_sims = list(enumerate(sim_matrix[most_similar_pos]))
-        rec_sims = sorted(rec_sims, key=lambda x: x[1], reverse=True)[1:k+1]
-        rec_indices = [train_idx[i] for i, _ in rec_sims]
+        # Apply quality weighting if provided
+        if quality_weights is not None:
+            similarities = similarities * quality_weights
+        
+        # Get top-k recommendations
+        top_k_positions = np.argsort(similarities)[::-1][:k]
+        rec_indices = [train_idx[pos] for pos in top_k_positions]
         rec_ratings = data['rating'].iloc[rec_indices].values
         
-        # Precision
+        # Precision: fraction of recommendations above threshold
         relevant = (rec_ratings >= threshold).sum()
         precisions.append(relevant / k)
         
@@ -109,19 +114,30 @@ def evaluate_similarity(sim_matrix, train_idx, test_idx, k=5, threshold=8.0):
         idcg = sum((2**ideal_r - 1) / np.log2(i+2) for i, ideal_r in enumerate(ideal))
         ndcgs.append(dcg / idcg if idcg > 0 else 0)
     
-    return {'precision': np.mean(precisions), 'ndcg': np.mean(ndcgs)}
+    return {
+        'precision': np.mean(precisions), 
+        'ndcg': np.mean(ndcgs),
+        'std_precision': np.std(precisions),
+        'std_ndcg': np.std(ndcgs)
+    }
 
-# Test baseline
+# ============================================================================
+# STEP 4: BASELINE - PURE CONTENT-BASED
+# ============================================================================
+
+print("\n\nSTEP 3: BASELINE - PURE CONTENT-BASED SIMILARITY")
+print("-" * 110)
+
 train_idx, test_idx = train_test_split(np.arange(len(data)), test_size=0.2, random_state=42)
-train_content_sim = cosine_similarity(content_features[train_idx])
-baseline_result = evaluate_similarity(train_content_sim, train_idx, test_idx)
+
+baseline_result = evaluate_recommendations(train_idx, test_idx, quality_weights=None)
 print(f"Content-Based Baseline - Precision@5: {baseline_result['precision']:.4f} | NDCG@5: {baseline_result['ndcg']:.4f}")
 
 # ============================================================================
-# STEP 4: ML MODEL 1 - GRADIENT BOOSTING FOR RANKING
+# STEP 5: ML MODEL 1 - GRADIENT BOOSTING FOR QUALITY PREDICTION
 # ============================================================================
 
-print("\n\nSTEP 4: ML MODEL 1 - GRADIENT BOOSTING RANKER")
+print("\n\nSTEP 4: ML MODEL 1 - GRADIENT BOOSTING QUALITY PREDICTOR")
 print("-" * 110)
 
 def create_pairwise_data(X, y, n_pairs=5000):
@@ -142,78 +158,87 @@ def create_pairwise_data(X, y, n_pairs=5000):
     return np.array(X_pairs), np.array(y_pairs)
 
 print("Training Gradient Boosting Ranker...")
-X_pairs_train, y_pairs_train = create_pairwise_data(content_features[train_idx], data['rating'].iloc[train_idx].values)
-gb_ranker = GradientBoostingRegressor(n_estimators=50, learning_rate=0.1, max_depth=3, random_state=42)
+X_pairs_train, y_pairs_train = create_pairwise_data(
+    content_features[train_idx], 
+    data['rating'].iloc[train_idx].values
+)
+
+gb_ranker = GradientBoostingRegressor(
+    n_estimators=50, 
+    learning_rate=0.1, 
+    max_depth=3, 
+    random_state=42
+)
 gb_ranker.fit(X_pairs_train, y_pairs_train)
 
-# Predict scores for ranking
+# FIXED: Use GB to predict quality scores, then weight content similarity
 gb_scores = gb_ranker.predict(content_features[train_idx].toarray())
-gb_sim = np.outer(gb_scores, gb_scores)  # Simple similarity from scores
+gb_weights = (gb_scores - gb_scores.min()) / (gb_scores.max() - gb_scores.min() + 1e-8)
 
-train_gb_sim = gb_sim / (np.max(gb_sim) + 1e-8)  # Normalize
+# Boost high-quality stories
+gb_quality_weights = np.power(gb_weights, 0.5)  # Square root to moderate the effect
 
-gb_result = evaluate_similarity(train_gb_sim, train_idx, test_idx)
-print(f"GB Ranker - Precision@5: {gb_result['precision']:.4f} | NDCG@5: {gb_result['ndcg']:.4f}")
+gb_result = evaluate_recommendations(train_idx, test_idx, quality_weights=gb_quality_weights)
+print(f"GB Quality-Weighted - Precision@5: {gb_result['precision']:.4f} | NDCG@5: {gb_result['ndcg']:.4f}")
 
 # ============================================================================
-# STEP 5: ML MODEL 2 - SUPPORT VECTOR REGRESSION
+# STEP 6: ML MODEL 2 - SUPPORT VECTOR REGRESSION
 # ============================================================================
 
 print("\nSTEP 5: ML MODEL 2 - SUPPORT VECTOR REGRESSION (SVR)")
 print("-" * 110)
 
 print("Training SVR for rating prediction...")
-# Use dense features for SVR (sampling to avoid memory issues)
+# Use subset for SVR (memory constraints)
 sample_size = min(2000, len(train_idx))
-sample_train_idx = train_idx[:sample_size]
+sample_train_idx = np.random.choice(train_idx, sample_size, replace=False)
+
 X_svr = content_features[sample_train_idx].toarray()
 y_svr = data['rating'].iloc[sample_train_idx].values
 
 svr_model = SVR(kernel='rbf', C=10, gamma='scale')
 svr_model.fit(X_svr, y_svr)
 
-# Predict ratings and convert to similarity
+# FIXED: Predict quality for all training stories and use as weights
 svr_scores = svr_model.predict(content_features[train_idx].toarray())
-svr_scores_normalized = (svr_scores - svr_scores.min()) / (svr_scores.max() - svr_scores.min() + 1e-8)
-svr_sim = np.outer(svr_scores_normalized, svr_scores_normalized)
+svr_weights = (svr_scores - svr_scores.min()) / (svr_scores.max() - svr_scores.min() + 1e-8)
 
-svr_result = evaluate_similarity(svr_sim, train_idx, test_idx)
-print(f"SVR - Precision@5: {svr_result['precision']:.4f} | NDCG@5: {svr_result['ndcg']:.4f}")
+# Boost high-quality stories
+svr_quality_weights = np.power(svr_weights, 0.5)
+
+svr_result = evaluate_recommendations(train_idx, test_idx, quality_weights=svr_quality_weights)
+print(f"SVR Quality-Weighted - Precision@5: {svr_result['precision']:.4f} | NDCG@5: {svr_result['ndcg']:.4f}")
 
 # ============================================================================
-# STEP 6: HYBRID 1 - CONTENT + GB RANKER
+# STEP 7: HYBRID 1 - CONTENT + GB RANKER
 # ============================================================================
 
 print("\n\nSTEP 6: HYBRID 1 - CONTENT-BASED + GRADIENT BOOSTING")
 print("-" * 110)
 
-# Combine: content similarity + GB ranking scores
-hybrid1_sim = 0.6 * train_content_sim + 0.4 * train_gb_sim
+# Combine: content similarity weighted by GB quality predictions
+# Use stronger weighting for high-quality predictions
+hybrid1_weights = np.power(gb_weights, 0.3)  # Gentler boost
 
-hybrid1_result = evaluate_similarity(hybrid1_sim, train_idx, test_idx)
+hybrid1_result = evaluate_recommendations(train_idx, test_idx, quality_weights=hybrid1_weights)
 print(f"Hybrid 1 (Content + GB) - Precision@5: {hybrid1_result['precision']:.4f} | NDCG@5: {hybrid1_result['ndcg']:.4f}")
 
-# ============================================================================
-# STEP 7: HYBRID 2 - CONTENT + SVR + RATING PATTERNS
-# ============================================================================
 
-print("\nSTEP 7: HYBRID 2 - CONTENT + SVR + RATING PATTERNS")
+
+
+
+# STEP 8: HYBRID 2 - CONTENT + SVR (Remove Direct Rating Boost)
+print("\nSTEP 8: HYBRID 2 - CONTENT + SVR ENHANCED")
 print("-" * 110)
 
-# Rating-based similarity
-train_rating_norm = (data['rating'].iloc[train_idx].values - data['rating'].iloc[train_idx].mean()) / data['rating'].iloc[train_idx].std()
-train_rating_vectors = np.tile(train_rating_norm, (len(train_idx), 1))
-train_rating_sim = np.corrcoef(train_rating_vectors)
-train_rating_sim = np.nan_to_num(train_rating_sim, 0)
+# Use SVR predictions more conservatively
+hybrid2_weights = np.power(svr_weights, 0.3)  # Even gentler boost
 
-# Combine all three
-hybrid2_sim = 0.5 * train_content_sim + 0.3 * svr_sim + 0.2 * train_rating_sim
-
-hybrid2_result = evaluate_similarity(hybrid2_sim, train_idx, test_idx)
-print(f"Hybrid 2 (Content + SVR + Rating) - Precision@5: {hybrid2_result['precision']:.4f} | NDCG@5: {hybrid2_result['ndcg']:.4f}")
+hybrid2_result = evaluate_recommendations(train_idx, test_idx, quality_weights=hybrid2_weights)
+print(f"Hybrid 2 (Content + SVR Enhanced) - Precision@5: {hybrid2_result['precision']:.4f} | NDCG@5: {hybrid2_result['ndcg']:.4f}")
 
 # ============================================================================
-# STEP 8: MODEL COMPARISON
+# STEP 9: MODEL COMPARISON
 # ============================================================================
 
 print("\n\n" + "=" * 110)
@@ -222,8 +247,8 @@ print("=" * 110)
 
 results = {
     'Content-Based (Baseline)': baseline_result,
-    'ML Model 1: Gradient Boosting Ranker': gb_result,
-    'ML Model 2: Support Vector Regression': svr_result,
+    'ML Model 1: Gradient Boosting Quality Weights': gb_result,
+    'ML Model 2: Support Vector Regression Weights': svr_result,
     'Hybrid 1: Content + GB': hybrid1_result,
     'Hybrid 2: Content + SVR + Rating': hybrid2_result
 }
@@ -243,7 +268,7 @@ print(f"  NDCG@5: {best_system[1]['ndcg']:.4f}")
 print("=" * 110)
 
 # ============================================================================
-# STEP 9: 5-FOLD CROSS-VALIDATION ON BEST SYSTEM
+# STEP 10: 5-FOLD CROSS-VALIDATION ON BEST SYSTEM
 # ============================================================================
 
 print("\n\nSTEP 9: 5-FOLD CROSS-VALIDATION ON BEST SYSTEM")
@@ -255,37 +280,47 @@ cv_precisions = []
 cv_ndcgs = []
 
 for fold_idx, (train_idx_cv, test_idx_cv) in enumerate(kf.split(data)):
-    # Create similarity matrices for this fold
-    train_content_sim_cv = cosine_similarity(content_features[train_idx_cv])
     
-    if 'GB' in best_system_name:
-        X_pairs_cv, y_pairs_cv = create_pairwise_data(content_features[train_idx_cv], data['rating'].iloc[train_idx_cv].values)
-        gb_ranker_cv = GradientBoostingRegressor(n_estimators=50, learning_rate=0.1, max_depth=3, random_state=42)
-        gb_ranker_cv.fit(X_pairs_cv, y_pairs_cv)
-        gb_scores_cv = gb_ranker_cv.predict(content_features[train_idx_cv].toarray())
-        gb_sim_cv = np.outer(gb_scores_cv, gb_scores_cv) / (np.max(np.outer(gb_scores_cv, gb_scores_cv)) + 1e-8)
-        final_sim = 0.6 * train_content_sim_cv + 0.4 * gb_sim_cv
-    
+    if 'GB' in best_system_name and 'SVR' not in best_system_name:
+        # GB Model
+        X_pairs_cv, y_pairs_cv = create_pairwise_data(
+            content_features[train_idx_cv], 
+            data['rating'].iloc[train_idx_cv].values
+        )
+        gb_cv = GradientBoostingRegressor(n_estimators=50, learning_rate=0.1, max_depth=3, random_state=42)
+        gb_cv.fit(X_pairs_cv, y_pairs_cv)
+        
+        gb_scores_cv = gb_cv.predict(content_features[train_idx_cv].toarray())
+        gb_weights_cv = (gb_scores_cv - gb_scores_cv.min()) / (gb_scores_cv.max() - gb_scores_cv.min() + 1e-8)
+        weights_cv = np.power(gb_weights_cv, 0.3)
+        
     elif 'SVR' in best_system_name:
-        sample_cv = train_idx_cv[:min(2000, len(train_idx_cv))]
+        # SVR Model
+        sample_cv = np.random.choice(train_idx_cv, min(2000, len(train_idx_cv)), replace=False)
         X_svr_cv = content_features[sample_cv].toarray()
         y_svr_cv = data['rating'].iloc[sample_cv].values
+        
         svr_cv = SVR(kernel='rbf', C=10, gamma='scale')
         svr_cv.fit(X_svr_cv, y_svr_cv)
+        
         svr_scores_cv = svr_cv.predict(content_features[train_idx_cv].toarray())
-        svr_scores_norm_cv = (svr_scores_cv - svr_scores_cv.min()) / (svr_scores_cv.max() - svr_scores_cv.min() + 1e-8)
-        train_rating_norm_cv = (data['rating'].iloc[train_idx_cv].values - data['rating'].iloc[train_idx_cv].mean()) / (data['rating'].iloc[train_idx_cv].std() + 1e-8)
-        train_rating_vectors_cv = np.tile(train_rating_norm_cv, (len(train_idx_cv), 1))
-        train_rating_sim_cv = np.corrcoef(train_rating_vectors_cv)
-        train_rating_sim_cv = np.nan_to_num(train_rating_sim_cv, 0)
-        svr_sim_cv = np.outer(svr_scores_norm_cv, svr_scores_norm_cv)
-        final_sim = 0.5 * train_content_sim_cv + 0.3 * svr_sim_cv + 0.2 * train_rating_sim_cv
-    
+        svr_weights_cv = (svr_scores_cv - svr_scores_cv.min()) / (svr_scores_cv.max() - svr_scores_cv.min() + 1e-8)
+        
+        if 'Rating' in best_system_name:
+            # Hybrid 2
+            train_ratings_cv = data['rating'].iloc[train_idx_cv].values
+            rating_boost_cv = (train_ratings_cv - train_ratings_cv.mean()) / (train_ratings_cv.std() + 1e-8)
+            rating_boost_cv = np.clip(rating_boost_cv, -1, 2)
+            rating_boost_cv = (rating_boost_cv + 1) / 3
+            weights_cv = 0.7 * svr_weights_cv + 0.3 * rating_boost_cv
+        else:
+            weights_cv = np.power(svr_weights_cv, 0.5)
     else:
-        final_sim = train_content_sim_cv
+        # Baseline
+        weights_cv = None
     
     # Evaluate this fold
-    result_cv = evaluate_similarity(final_sim, train_idx_cv, test_idx_cv)
+    result_cv = evaluate_recommendations(train_idx_cv, test_idx_cv, quality_weights=weights_cv)
     cv_precisions.append(result_cv['precision'])
     cv_ndcgs.append(result_cv['ndcg'])
     print(f"Fold {fold_idx + 1}: Precision@5 = {result_cv['precision']:.4f} | NDCG@5 = {result_cv['ndcg']:.4f}")
@@ -296,82 +331,113 @@ print(f"NDCG@5: {np.mean(cv_ndcgs):.4f} ± {np.std(cv_ndcgs):.4f}")
 print(f"Std Dev (Precision): {np.std(cv_precisions):.4f} → {'✓ Excellent' if np.std(cv_precisions) < 0.05 else '✓ Good' if np.std(cv_precisions) < 0.08 else '⚠ Check'}")
 
 # ============================================================================
-# STEP 10: SAMPLE RECOMMENDATIONS
+# STEP 11: SAMPLE RECOMMENDATIONS
 # ============================================================================
 
 print("\n\n" + "=" * 110)
 print("STEP 10: SAMPLE RECOMMENDATIONS FROM BEST SYSTEM")
 print("=" * 110)
 
-train_idx_final, test_idx_final = train_test_split(np.arange(len(data)), test_size=0.2, random_state=42)
-train_content_sim_final = cosine_similarity(content_features[train_idx_final])
+# Use best weights for recommendations
+if 'GB' in best_system_name and 'SVR' not in best_system_name:
+    best_weights = gb_quality_weights
+elif 'SVR' in best_system_name and 'Rating' in best_system_name:
+    best_weights = hybrid2_weights
+elif 'SVR' in best_system_name:
+    best_weights = svr_quality_weights
+else:
+    best_weights = None
 
-for sample_idx in range(min(3, len(test_idx_final))):
-    test_original_idx = test_idx_final[sample_idx]
+for sample_idx in range(min(3, len(test_idx))):
+    test_original_idx = test_idx[sample_idx]
     story = data.iloc[test_original_idx]
     
-    test_features = content_features[test_original_idx].toarray()
-    sims_to_test = cosine_similarity(test_features, content_features[train_idx_final])[0]
-    most_similar_pos = np.argmax(sims_to_test)
+    # Get recommendations for this test story
+    test_feature = content_features[test_original_idx]
+    similarities = cosine_similarity(test_feature, content_features[train_idx])[0]
     
-    rec_sims = list(enumerate(train_content_sim_final[most_similar_pos]))
-    rec_sims = sorted(rec_sims, key=lambda x: x[1], reverse=True)[1:6]
+    if best_weights is not None:
+        similarities = similarities * best_weights
+    
+    top_5 = np.argsort(similarities)[::-1][:5]
     
     print(f"\n\nQuery Story: {story['story_name']} (Rating: {story['rating']:.2f})")
     print("-" * 110)
     print("Top 5 Recommendations:")
     
-    for rank, (rec_pos, sim_score) in enumerate(rec_sims, 1):
-        rec_story = data.iloc[train_idx_final[rec_pos]]
+    for rank, pos in enumerate(top_5, 1):
+        rec_story = data.iloc[train_idx[pos]]
         quality = "✓ HIGH" if rec_story['rating'] >= 8.0 else ""
         print(f"  {rank}. {rec_story['story_name'][:60]} | Rating: {rec_story['rating']:.2f} {quality}")
 
-print("\n\n" + "=" * 110)
-print("ANALYSIS COMPLETE")
-print("=" * 110)
-# ============================================================
-# STEP 11: USER INPUT RECOMMENDATIONS
-# ============================================================
+# ============================================================================
+# STEP 12: USER INPUT RECOMMENDATIONS
+# ============================================================================
 
 def recommend_from_input(user_input, top_k=5):
     """
     Recommend stories based on either:
     - a story title in the dataset
-    - or a free-text description (e.g., 'scary ghosts in mirrors')
+    - or a free-text description
     """
     user_input = user_input.strip().lower()
     
     # Case 1: if it's an existing story title
-    match = data[data['story_name'].str.lower().str.contains(user_input, case=False)]
+    match = data[data['story_name'].str.lower().str.contains(user_input, case=False, na=False)]
     
     if not match.empty:
         idx = match.index[0]
         story = data.iloc[idx]
         print(f"\nGiven story: {story['story_name']} (Rating: {story['rating']:.2f})")
-        sims = cosine_similarity(content_features[idx], content_features)[0]
-        recs = np.argsort(sims)[::-1][1:top_k+1]
+        
+        # Use best weights for recommendations
+        story_feature = content_features[idx]
+        sims = cosine_similarity(story_feature, content_features)[0]
+        
+        if best_weights is not None and idx in train_idx:
+            # Apply weights if available
+            train_sims = cosine_similarity(story_feature, content_features[train_idx])[0]
+            train_sims = train_sims * best_weights
+            recs = np.argsort(train_sims)[::-1][1:top_k+1]
+            recs = [train_idx[r] for r in recs]
+        else:
+            recs = np.argsort(sims)[::-1][1:top_k+1]
+        
         print("\nTop Recommendations:")
         for rank, rec_idx in enumerate(recs, 1):
             rec_story = data.iloc[rec_idx]
             print(f"  {rank}. {rec_story['story_name']} | Rating: {rec_story['rating']:.2f}")
     
     else:
-        # Case 2: free text (new input story)
+        # Case 2: free text (new input)
         print("\nNew input text detected.")
         input_vec = tfidf_vec.transform([user_input])
-        input_features = hstack([input_vec * 0.7,
-                                 csr_matrix(np.zeros((1, tag_matrix.shape[1])) * 0.2),
-                                 csr_matrix(np.zeros((1, cat_matrix.shape[1])) * 0.1)])
-        sims = cosine_similarity(input_features, content_features)[0]
+        input_features = hstack([
+            input_vec * 0.7,
+            csr_matrix(np.zeros((1, tag_matrix.shape[1])) * 0.2),
+            csr_matrix(np.zeros((1, cat_matrix.shape[1])) * 0.1)
+        ])
+        
+        sims = cosine_similarity(input_features, content_features[train_idx])[0]
+        
+        if best_weights is not None:
+            sims = sims * best_weights
+        
         recs = np.argsort(sims)[::-1][:top_k]
+        recs = [train_idx[r] for r in recs]
+        
         print("\nTop Recommendations:")
         for rank, rec_idx in enumerate(recs, 1):
             rec_story = data.iloc[rec_idx]
             print(f"  {rank}. {rec_story['story_name']} | Rating: {rec_story['rating']:.2f}")
 
-# ============================================================
-# STEP 12: INTERACTIVE RECOMMENDATION PROMPT
-# ============================================================
+print("\n\n" + "=" * 110)
+print("ANALYSIS COMPLETE")
+print("=" * 110)
+
+# ============================================================================
+# STEP 13: INTERACTIVE RECOMMENDATION PROMPT
+# ============================================================================
 
 while True:
     user_query = input("\nEnter a story title or short description (or 'exit' to quit): ").strip()
@@ -380,6 +446,3 @@ while True:
         break
     if user_query:
         recommend_from_input(user_query)
-# Example usage:
-# recommend_from_input("Mirror Image")
-# recommend_from_input("scary haunted house with ghosts")
