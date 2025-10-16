@@ -71,14 +71,14 @@ python assignment.py
 - Improvement: +26.7% over baseline
 
 **5-Fold Cross-Validation Results:**
-- Precision@5: 0.6650 ± 0.0147 ✓ Excellent stability
+- Precision@5: 0.6650 ± 0.0147
 - NDCG@5: 0.8938 ± 0.0016
 
 ## Dataset Requirements
 
 Excel file (`creepypastas.xlsx`) with columns:
 - `story_name`, `body`, `average_rating`
-- `tags`, `categories`, `estimated_reading_time`
+- `tags`, `categories`, `estimated_reading_time`,`publish_date`
 
 ## Project Structure
 
@@ -97,20 +97,6 @@ horror-story-recommender/
 - **Evaluation**: 80/20 train-test split, 5-fold CV
 - **Threshold**: Rating ≥8.0 = relevant
 
-## Key Improvements
-
-**Fixed Evaluation Method:**
-- Old: Found similar training story first (inflated scores)
-- New: Direct test-to-train similarity (realistic scores)
-
-**ML as Quality Weights:**
-- Old: Created artificial similarity from predictions
-- New: Weight content similarity with quality predictions
-
-**Results:**
-- More realistic scores (0.63-0.80 vs inflated 1.0)
-- Better CV consistency (16.6% gap vs 32%)
-- Diverse recommendations (ratings 6.0-9.0 vs only 9.0+)
 
 ## About `samp_assign.py`
 
