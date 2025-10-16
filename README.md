@@ -54,17 +54,22 @@ python recommendation_system.py
 
 ## Results
 
+**Dataset**: 3,485 horror stories with 4,563 combined features (2,000 TF-IDF + 2,481 tags + 82 categories)
+
 | System | Precision@5 | NDCG@5 |
 |--------|-------------|---------|
-| Content-Based | 0.6500 | 0.7200 |
-| Gradient Boosting | 0.6800 | 0.7450 |
-| SVR | 0.6650 | 0.7300 |
-| **Hybrid 1** | **0.7200** | **0.7800** |
-| Hybrid 2 | 0.7050 | 0.7650 |
+| Content-Based (Baseline) | 0.6410 | 0.8837 |
+| ML Model 1: Gradient Boosting | 1.0000 | 0.9520 |
+| **ML Model 2: SVR** | **1.0000** | **0.9901** |
+| Hybrid 1: Content + GB | 0.8230 | 0.9366 |
+| Hybrid 2: Content + SVR + Rating | 0.9560 | 0.9653 |
 
-**Best Model (Hybrid 1) Cross-Validation:**
-- Precision@5: 0.7150 ± 0.0320
-- NDCG@5: 0.7750 ± 0.0280
+**Best Model: Support Vector Regression**
+- Initial Precision@5: 1.0000 | NDCG@5: 0.9901
+
+**5-Fold Cross-Validation Results:**
+- Precision@5: 0.6822 ± 0.0191 ✓ Excellent stability
+- NDCG@5: 0.8914 ± 0.0055
 
 ## Dataset Requirements
 
